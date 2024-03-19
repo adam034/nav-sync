@@ -8,11 +8,28 @@ const staging =
   "postgresql://irf:RQWW4c397xzEVNL2@192.168.0.51:5433/irf?schema=public";
 const dev =
   "postgresql://irf:irf@cerestar-irf.zero-one.cloud:5432/irf?schema=public";
-const localDb = "postgresql://irf:irf@localhost:5432/irf?schema=public";
+const localDb = "postgresql://irf:irf@localhost:5433/irf?schema=public";
 const pool = new pg.Pool({
   connectionString: localDb,
 });
 const navWebServiceUrl = `http://CSV-002.SBI.local:8648/CFM_NEW/ODataV4/Company('CFM-CILEGON')/Item`;
+
+function generateCode(prefix, length) {
+  const randomNumber = Math.floor(Math.random() * Math.pow(10, length));
+  const paddedNumber = String(randomNumber).padStart(length, "0");
+  return `${prefix}-${paddedNumber}`;
+}
+
+function removeDuplicates(array, property) {
+  const uniqueValues = new Set();
+  return array.filter((item) => {
+    if (!uniqueValues.has(item[property])) {
+      uniqueValues.add(item[property]);
+      return true;
+    }
+    return false;
+  });
+}
 
 async function dumData() {
   const client = await pool.connect();
@@ -38,7 +55,7 @@ async function dumData() {
           manufacturer_part_no: row.values[8],
           base_unit_of_measure: row.values[9],
           mro_code: row.values[10],
-          event_type: row.values[11],
+          event_type: "APPROVED_2",
           status_item: "Active",
           check_item: 1,
         });
@@ -94,35 +111,35 @@ async function fetchData() {
       },
     });
     const result = response.data.value;
-    const propertyName = Object.keys(result[0]);
-    const setColumn = propertyName.map((p) => {
-      return {
-        header: p,
-        key: p.toLowerCase(),
-        width: 20,
-      };
-    });
-    worksheet.columns = setColumn;
-    const data = result.map((r) => {
-      const newItem = {};
-      propertyName.forEach((p) => {
-        if (r.hasOwnProperty(p)) {
-          newItem[p.toLowerCase()] = r[p];
-        }
-      });
-      return newItem;
-    });
+    // const propertyName = Object.keys(result[0]);
+    // const setColumn = propertyName.map((p) => {
+    //   return {
+    //     header: p,
+    //     key: p.toLowerCase(),
+    //     width: 20,
+    //   };
+    // });
+    // worksheet.columns = setColumn;
+    // const data = result.map((r) => {
+    //   const newItem = {};
+    //   propertyName.forEach((p) => {
+    //     if (r.hasOwnProperty(p)) {
+    //       newItem[p.toLowerCase()] = r[p];
+    //     }
+    //   });
+    //   return newItem;
+    // });
 
-    worksheet.addRows(data);
-    const filePath = "item_cfm_cilegon.xlsx";
-    workbook.xlsx
-      .writeFile(filePath)
-      .then(() => {
-        console.log("Already export");
-      })
-      .catch((error) => {
-        console.error("Error", error.message);
-      });
+    // worksheet.addRows(data);
+    // const filePath = "item_cfm_cilegon.xlsx";
+    // workbook.xlsx
+    //   .writeFile(filePath)
+    //   .then(() => {
+    //     console.log("Already export");
+    //   })
+    //   .catch((error) => {
+    //     console.error("Error", error.message);
+    //   });
     //console.log(response.data.value);
     // // Parse the XML response
     // const xmlData = response.data;
@@ -137,15 +154,53 @@ async function fetchData() {
     //   // Process the parsed data as needed
     //   // ...
     // });
+
+    return result;
   } catch (error) {
     console.error("Error:", error.message);
   }
 }
 
+async function migrateDescriptionData() {
+  const client = await pool.connect();
+
+  await client.query("BEGIN");
+  try {
+    const query = `SELECT description,description_2,mro_code FROM event_stream_items`;
+    const result = await client.query(query);
+    const filtered = removeDuplicates(
+      result.rows.filter(
+        (s) => s.description !== null && s.description_2 !== null
+      ),
+      "description"
+    );
+    const insertQuery =
+      "INSERT INTO event_stream_descriptions (code,description,description_2,mro_code,event_type,append_by) VALUES ($1,$2,$3,$4,$5,$6)";
+    await Promise.all(
+      filtered.map(async (d) => {
+        return await client.query(insertQuery, [
+          generateCode("D", 5),
+          d.description,
+          d.description_2,
+          d.mro_code,
+          "APPROVED_2",
+          1,
+        ]);
+      })
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    console.log(error);
+    await client.query("ROLLBACK");
+  } finally {
+    client.release();
+  }
+  await pool.end();
+}
 (async () => {
   console.time("START INSERT");
   console.log("==START INSERT DATA==");
-  console.log(await dumData());
+  console.log(await fetchData());
   console.log("==FINISH INSERT DATA==");
   console.timeEnd("START INSERT");
 })();
