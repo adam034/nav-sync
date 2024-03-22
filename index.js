@@ -10,9 +10,9 @@ const dev =
   "postgresql://irf:irf@cerestar-irf.zero-one.cloud:5432/irf?schema=public";
 const localDb = "postgresql://irf:irf@localhost:5433/irf?schema=public";
 const pool = new pg.Pool({
-  connectionString: localDb,
+  connectionString: dev,
 });
-const navWebServiceUrl = `http://CSV-002.SBI.local:8648/CFM_NEW/ODataV4/Company('CFM-CILEGON')/Item`;
+const navWebServiceUrl = `http://192.168.0.17:8648/CFM_NEW/ODataV4/Company('ZZZ%20CLG%20ZeroOne')/Item`;
 
 function generateCode(prefix, length) {
   const randomNumber = Math.floor(Math.random() * Math.pow(10, length));
@@ -38,30 +38,33 @@ async function dumData() {
   try {
     const data = [];
     const workbook = new ExcelJS.Workbook();
-    const sheets = (await workbook.xlsx.readFile("items.xlsx")).getWorksheet(
-      "items-dump"
-    );
+    const sheets = (
+      await workbook.xlsx.readFile("items_three.xlsx")
+    ).getWorksheet("items");
 
     sheets.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber > 1) {
         data.push({
           no: row.values[1],
-          description: row.values[2],
-          description_two: row.values[3],
-          material: row.values[4],
-          specification: row.values[5],
-          feature: row.values[6],
-          manufacturer: row.values[7],
-          manufacturer_part_no: row.values[8],
+          description: row.values[3],
+          description_two: row.values[4],
+          material: row.values[32],
+          specification: row.values[33],
+          feature: row.values[36],
+          manufacturer: row.values[34],
+          manufacturer_part_no: row.values[35],
           base_unit_of_measure: row.values[9],
-          mro_code: row.values[10],
+          mro_code: row.values[2],
           event_type: "APPROVED_2",
           status_item: "Active",
           check_item: 1,
         });
       }
     });
-    const results = data.filter((d) => d.mro_code !== "");
+    const results = data.filter(
+      (d) => d.mro_code !== "" && d.no.startsWith("M0")
+    );
+
     console.log(results);
     const query =
       "INSERT INTO event_stream_items (no_nav,description,description_2,material,specification,feature,manufacturer,manufacturer_part_no,base_unit_of_measure,mro_code,event_type,status_item,check_item) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)";
@@ -111,6 +114,7 @@ async function fetchData() {
       },
     });
     const result = response.data.value;
+    console.log(result.length);
     // const propertyName = Object.keys(result[0]);
     // const setColumn = propertyName.map((p) => {
     //   return {
@@ -140,7 +144,7 @@ async function fetchData() {
     //   .catch((error) => {
     //     console.error("Error", error.message);
     //   });
-    //console.log(response.data.value);
+    // console.log(response.data.value);
     // // Parse the XML response
     // const xmlData = response.data;
     // parseString(xmlData, (err, result) => {
@@ -155,7 +159,7 @@ async function fetchData() {
     //   // ...
     // });
 
-    return result;
+    // return result;
   } catch (error) {
     console.error("Error:", error.message);
   }
@@ -166,20 +170,23 @@ async function migrateDescriptionData() {
 
   await client.query("BEGIN");
   try {
-    const query = `SELECT description,description_2,mro_code FROM event_stream_items`;
+    const query = `SELECT DISTINCT ON (esi.description, esi.description_2)
+                        esi.description, esi.description_2, esi.mro_code
+                    FROM
+                        event_stream_items esi
+                    LEFT JOIN
+                        event_stream_descriptions esd
+                        ON esi.description = esd.description AND esi.description_2 = esd.description_2
+                    WHERE
+                        esd.description IS NULL AND esd.description_2 IS NULL;`;
     const result = await client.query(query);
-    const filtered = removeDuplicates(
-      result.rows.filter(
-        (s) => s.description !== null && s.description_2 !== null
-      ),
-      "description"
-    );
+
     const insertQuery =
       "INSERT INTO event_stream_descriptions (code,description,description_2,mro_code,event_type,append_by) VALUES ($1,$2,$3,$4,$5,$6)";
     await Promise.all(
-      filtered.map(async (d) => {
+      result.rows.map(async (d) => {
         return await client.query(insertQuery, [
-          generateCode("D", 5),
+          generateCode("D", 7),
           d.description,
           d.description_2,
           d.mro_code,
@@ -200,7 +207,7 @@ async function migrateDescriptionData() {
 (async () => {
   console.time("START INSERT");
   console.log("==START INSERT DATA==");
-  console.log(await fetchData());
+  console.log(await migrateDescriptionData());
   console.log("==FINISH INSERT DATA==");
   console.timeEnd("START INSERT");
 })();
